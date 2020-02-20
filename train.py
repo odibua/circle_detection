@@ -113,7 +113,7 @@ data_test_loader = DataLoader(val_data, batch_size=1024, num_workers=8)
 
 net = LeNet5().float()
 viz = visdom.Visdom()
-criterion = nn.CrossEntropyLoss()
+criterion = nn.MSELoss()
 optimizer = optim.Adam(net.parameters(), lr=2e-3)
 
 cur_batch_win = None
@@ -134,6 +134,7 @@ def train(epoch):
         optimizer.zero_grad()
         # import ipdb
         # ipdb.set_trace()
+        labels = torch.stack(labels).T.float()
         output = net(images.float())
 
         loss = criterion(output, labels)
