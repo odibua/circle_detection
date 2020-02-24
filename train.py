@@ -12,26 +12,32 @@ from shapely.geometry import Point, GeometryCollection
 
 
 def giou(params0, params1):
+    # import ipdb
+    # ipdb.set_trace()
     row0, col0, rad0 = params0
     row1, col1, rad1 = params1
 
     shape0 = Point(row0, col0).buffer(rad0)
     shape1 = Point(row1, col1).buffer(rad1)
-    collection = GeometryCollection([shape0, shape1])
+    collection = GeometryCollection([shape0, shape1]).convex_hull
 
     return (
-            iou(params0, params1) - collection.difference(shape0.union(shape1)).area /
-            collection.area
+            1.0 - (iou(params0, params1) - collection.convex_hull.difference(shape0.union(shape1)).area /
+            collection.convex_hull.area)
     )
 
 class GIOULOSS(nn.Module):
 
     def __init__(self):
-        super(GIOULOSS, self).__init()
+        super(GIOULOSS, self).__init__()
 
     def forward(self, x, y):
+        # import ipdb
+        # ipdb.set_trace()
         x_npy, y_npy = x.data.numpy(), y.data.numpy()
-        mse = np.sum(np.sum((x_npy - y_npy)**2, axis=0))
+        _giou = torch.autograd.Variable(torch.from_numpy(np.array(list(map(giou, x_npy, y_npy)))), requires_grad=True)
+        giou_loss = torch.sum(_giou)
+        return giou_loss#torch.autograd.Variable(giou_loss, requires_grad=True)#
 
 class LeNet5(nn.Module):
     """
@@ -76,10 +82,12 @@ class LeNet5(nn.Module):
         ]))
 
         self.fc = nn.Sequential(OrderedDict([
-            ('f6', nn.Linear(120, 84)),
-            ('relu6', nn.ReLU()),
-            ('f7', nn.Linear(84, 10)),
-            ('f8', nn.Linear(10, 3))
+            ('f8', nn.Linear(120, 84)),
+            ('relu8', nn.LeakyReLU()),
+            ('f9', nn.Linear(84, 10)),
+            ('relu9', nn.LeakyReLU()),
+            ('f10', nn.Linear(10, 3)),
+            ('relu10', nn.LeakyReLU()),
         ]))
 
     def forward(self, img):
@@ -93,28 +101,34 @@ def generate_training_data(n, train_perc=0.8):
     np.random.seed(0)
     param_image_list = []
 
+    mean_params = None
     for i in range(n):
         params, img = noisy_circle(200, 50, 2)
         param_image_list.append((params, np.expand_dims(img, axis=0)))
+        mean_params = params if i == 0 else mean_params + params
     train_data, val_data = param_image_list[0:int(n * train_perc)], param_image_list[int(n * train_perc):]
+
 
     return train_data, val_data
 
 
 # Generate data
-train_data, val_data = generate_training_data(n=2000)
+import ipdb
+ipdb.set_trace()
+train_data, val_data = generate_training_data(n=20)
+a,b  = zip(*train_data)
 
 # class CircleDataset(Dataset):
 #     def __init__(self, data):
 #         self.samples = data
 
-data_train_loader = DataLoader(train_data, batch_size=256, shuffle=False, num_workers=8)
+data_train_loader = DataLoader(train_data, batch_size=256, shuffle=True, num_workers=8)
 data_test_loader = DataLoader(val_data, batch_size=1024, num_workers=8)
 
 net = LeNet5().float()
 viz = visdom.Visdom()
-criterion = nn.MSELoss()
-optimizer = optim.Adam(net.parameters(), lr=2e-3)
+criterion = GIOULOSS() #nn.MSELoss()
+optimizer = optim.Adam(net.parameters(), lr=2e-1)
 
 cur_batch_win = None
 cur_batch_win_opts = {
@@ -160,14 +174,16 @@ def test():
     net.eval()
     total_correct = 0
     avg_loss = 0.0
-    for i, (images, labels) in enumerate(data_test_loader):
-        output = net(images)
+    for i, (labels, images) in enumerate(data_test_loader):
+        labels = torch.stack(labels).T.float()
+        output = net(images.float())
         avg_loss += criterion(output, labels).sum()
-        pred = output.detach().max(1)[1]
-        total_correct += pred.eq(labels.view_as(pred)).sum()
+        pred = output.detach()
+        print('Prediction: {pred} Label: {lab}'.format(pred=pred, lab=labels))
+        # total_correct += pred.eq(labels.view_as(pred)).sum()
 
     avg_loss /= len(val_data)
-    print('Test Avg. Loss: %f, Accuracy: %f' % (avg_loss.detach().cpu().item(), float(total_correct) / len(data_test)))
+    print('Test Avg. Loss: %f' % (avg_loss.detach().cpu().item()))
 
 
 def train_and_test(epoch):
@@ -176,7 +192,7 @@ def train_and_test(epoch):
 
 
 def main():
-    for e in range(1, 2):
+    for e in range(1, 10):
         train_and_test(e)
 
 
