@@ -25,7 +25,7 @@ def noisy_circle(size, radius, noise):
     draw_circle(img, row, col, rad)
 
     # Noise
-    img += noise * np.random.rand(*img.shape)
+    # img += noise * np.random.rand(*img.shape)
     return (row, col, rad), img
 
 

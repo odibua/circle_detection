@@ -1,134 +1,66 @@
 import itertools
 import ipdb
 import numpy as np
+import os
 import visdom
 import torch
 import torch.nn as nn
-from collections import OrderedDict
-from torch.utils.data import DataLoader, Dataset
+from model import Net
+from torch.utils.data import DataLoader
 import torch.optim as optim
-from utils import iou, noisy_circle
-from shapely.geometry import Point, GeometryCollection
+from typing import Tuple
+from utils import iou, noisy_circle, normalize
 
 
-def giou(params0, params1):
-    # import ipdb
-    # ipdb.set_trace()
-    row0, col0, rad0 = params0
-    row1, col1, rad1 = params1
-
-    shape0 = Point(row0, col0).buffer(rad0)
-    shape1 = Point(row1, col1).buffer(rad1)
-    collection = GeometryCollection([shape0, shape1]).convex_hull
-
-    return (
-            1.0 - (iou(params0, params1) - collection.convex_hull.difference(shape0.union(shape1)).area /
-            collection.convex_hull.area)
-    )
-
-class GIOULOSS(nn.Module):
-
-    def __init__(self):
-        super(GIOULOSS, self).__init__()
-
+class DIOULOSS(nn.Module):
+    def __init__(self, mn: float, std: float, w: int, h: int):
+        super(DIOULOSS, self).__init__()
     def forward(self, x, y):
         # import ipdb
         # ipdb.set_trace()
-        x_npy, y_npy = x.data.numpy(), y.data.numpy()
-        _giou = torch.autograd.Variable(torch.from_numpy(np.array(list(map(giou, x_npy, y_npy)))), requires_grad=True)
-        giou_loss = torch.sum(_giou)
-        return giou_loss#torch.autograd.Variable(giou_loss, requires_grad=True)#
-
-class LeNet5(nn.Module):
-    """
-    Input - 1x200x200
-    C1 - 6@196x196 (5x5 kernel)
-    tanh
-    S2 - 6@98x98 (2x2 kernel, stride 2) Subsampling
-    C3 - 16@94x94 (5x5 kernel)
-    tanh
-    S4 - 16@47x47 (2x2 kernel, stride 2) Subsampling
-    C5 - 32@43x43 (5x5 kernel)
-    tanh
-    S5 - 32@21x21 (3x3 kernel, stride 2) Subsampling
-    C6 - 64@17x17 (5x5 kernel)
-    tanh
-    S6 - 64@8x8 (3x3 kernel, stride 2) Subsampling
-    C7 - 120@1x1 (8x8 kernel)
-    tanh
-
-    F6 - 84
-    tanh
-    F7 - 10 (Output)
-    """
-
-    def __init__(self):
-        super(LeNet5, self).__init__()
-        self.convnet = nn.Sequential(OrderedDict([
-            ('c1', nn.Conv2d(1, 6, kernel_size=5)),
-            ('relu1', nn.ReLU()),
-            ('s2', nn.MaxPool2d(kernel_size=2, stride=2)),
-            ('c3', nn.Conv2d(6, 16, kernel_size=5)),
-            ('relu3', nn.ReLU()),
-            ('s4', nn.MaxPool2d(kernel_size=2, stride=2)),
-            ('c5', nn.Conv2d(16, 32, kernel_size=5)),
-            ('relu5', nn.ReLU()),
-            ('s5', nn.MaxPool2d(kernel_size=3, stride=2)),
-            ('c6', nn.Conv2d(32, 64, kernel_size=5)),
-            ('relu6', nn.ReLU()),
-            ('s6', nn.MaxPool2d(kernel_size=3, stride=2)),
-            ('c7', nn.Conv2d(64, 120, kernel_size=8)),
-            ('relu7', nn.ReLU()),
-        ]))
-
-        self.fc = nn.Sequential(OrderedDict([
-            ('f8', nn.Linear(120, 84)),
-            ('relu8', nn.LeakyReLU()),
-            ('f9', nn.Linear(84, 10)),
-            ('relu9', nn.LeakyReLU()),
-            ('f10', nn.Linear(10, 3)),
-            ('relu10', nn.LeakyReLU()),
-        ]))
-
-    def forward(self, img):
-        output = self.convnet(img)
-        output = output.view(img.size(0), -1)
-        output = self.fc(output)
-        return output
+        mse = torch.mean(torch.sum((x - y)**2, axis=1))
+        return mse
 
 
-def generate_training_data(n, train_perc=0.8):
+def generate_training_data(n: int, train_perc: float=0.8) -> Tuple[np.ndarray, np.ndarray, float, float]:
     np.random.seed(0)
-    param_image_list = []
-
+    def _list_of_tuples(list1, list2):
+        return list(map(lambda x, y: (x, y), list1, list2))
     mean_params = None
+    params_list = []
+    image_list = []
     for i in range(n):
         params, img = noisy_circle(200, 50, 2)
-        param_image_list.append((params, np.expand_dims(img, axis=0)))
-        mean_params = params if i == 0 else mean_params + params
-    train_data, val_data = param_image_list[0:int(n * train_perc)], param_image_list[int(n * train_perc):]
+        params_list.append(params)
+        image_list.append(np.expand_dims(img, axis=0))
 
+    # Split data to train and val
+    train_params_list, val_params_list = np.array(params_list[0:int(n * train_perc)]), np.array(params_list[int(n * train_perc):])
+    train_image_list, val_image_list = np.array(image_list[0:int(n * train_perc)]), np.array(image_list[int(n * train_perc):])
 
-    return train_data, val_data
+    # Normalize output to make optimization simpler
+    mn_params, std_params = np.mean(train_params_list, axis=0), np.std(train_params_list, axis=0)
+    train_params_list = normalize(train_params_list, mn_params, std_params)
+    val_params_list = normalize(val_params_list, mn_params, std_params)
+
+    # Output train and test data
+    train_params_list = list(map(tuple, train_params_list))
+    val_params_list  = list(map(tuple, val_params_list))
+    train_data = _list_of_tuples(train_params_list, train_image_list)
+    val_data = _list_of_tuples(val_params_list, val_image_list)
+
+    return train_data, val_data, mn_params, std_params
 
 
 # Generate data
-import ipdb
-ipdb.set_trace()
-train_data, val_data = generate_training_data(n=20)
-a,b  = zip(*train_data)
-
-# class CircleDataset(Dataset):
-#     def __init__(self, data):
-#         self.samples = data
-
+train_data, val_data, mn, std = generate_training_data(n=10)
 data_train_loader = DataLoader(train_data, batch_size=256, shuffle=True, num_workers=8)
 data_test_loader = DataLoader(val_data, batch_size=1024, num_workers=8)
 
-net = LeNet5().float()
+net = Net().float()
 viz = visdom.Visdom()
-criterion = GIOULOSS() #nn.MSELoss()
-optimizer = optim.Adam(net.parameters(), lr=2e-1)
+criterion = DIOULOSS()# nn.MSELoss()
+optimizer =optim.Adadelta(net.parameters())
 
 cur_batch_win = None
 cur_batch_win_opts = {
@@ -143,7 +75,8 @@ cur_batch_win_opts = {
 def train(epoch):
     global cur_batch_win
     net.train()
-    loss_list, batch_list = [], []
+    loss_list, batch_list, idx = [], [], 0
+    f = open("logging.txt", "a+")
     for i, (labels, images) in enumerate(data_train_loader):
         optimizer.zero_grad()
         # import ipdb
@@ -158,6 +91,10 @@ def train(epoch):
 
         if i % 10 == 0:
             print('Train - Epoch %d, Batch: %d, Loss: %f' % (epoch, i, loss.detach().cpu().item()))
+            print('Prediction: {pred} Label: {lab}'.format(pred=output[0:5], lab=labels[0:5]))
+        if epoch % 50 == 0 and i == 0:
+            torch.save(net.state_dict(), f"checkpoints/model{epoch}")
+            f.write(f"{epoch}, {i}, {loss.detach().cpu().item()} \n")
 
         # Update Visualization
         if viz.check_connection():
@@ -177,11 +114,10 @@ def test():
     for i, (labels, images) in enumerate(data_test_loader):
         labels = torch.stack(labels).T.float()
         output = net(images.float())
-        avg_loss += criterion(output, labels).sum()
+        avg_loss += criterion(output, labels)
         pred = output.detach()
-        print('Prediction: {pred} Label: {lab}'.format(pred=pred, lab=labels))
+        print('Prediction: {pred} Label: {lab}'.format(pred=pred[0:10], lab=labels[0:10]))
         # total_correct += pred.eq(labels.view_as(pred)).sum()
-
     avg_loss /= len(val_data)
     print('Test Avg. Loss: %f' % (avg_loss.detach().cpu().item()))
 
@@ -192,7 +128,11 @@ def train_and_test(epoch):
 
 
 def main():
-    for e in range(1, 10):
+    if os.path.exists("logging.txt"):
+        os.remove("logging.txt")
+        f = open("logging.txt", "w+")
+        f.close()
+    for e in range(1, 1000):
         train_and_test(e)
 
 
