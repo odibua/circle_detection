@@ -1,8 +1,17 @@
 import ipdb
 import numpy as np
+import os
 from skimage.draw import circle_perimeter_aa
 from shapely.geometry import Point, GeometryCollection
 import matplotlib.pyplot as plt
+
+
+def create_log_files(log_file, input):
+    if os.path.exists(log_file):
+        os.remove(log_file)
+        f = open(log_file, "w+")
+        f.write(input)
+        f.close()
 
 
 def draw_circle(img, row, col, rad):

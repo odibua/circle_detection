@@ -9,18 +9,56 @@ from model import Net
 from torch.utils.data import DataLoader
 import torch.optim as optim
 from typing import Tuple
-from utils import iou, noisy_circle, normalize
+from utils import (
+    create_log_files,
+    iou,
+    noisy_circle,
+    normalize)
 
 
 class DIOULOSS(nn.Module):
-    def __init__(self, mn: float, std: float, w: int, h: int):
+    def __init__(self, mn: np.ndarray, std: np.ndarray, w: int, h: int):
         super(DIOULOSS, self).__init__()
-    def forward(self, x, y):
+        self.mn, self.std = mn, std
+        self.w, self.h = w, h
+
+    def forward(self, pred, label):
+        n = pred.size()[0]
+        img_pred = torch.zeros([n, self.w, self.h], dtype=torch.int32)
+        img_label = torch.zeros([n, self.w, self.h], dtype=torch.int32)
+
+        pred_dim = pred*torch.tensor(self.std) + torch.tensor(mn)
+        label_dim = label*torch.tensor(self.std) + torch.tensor(mn)
+        x_pred_ranges, y_pred_ranges = self.get_range(n, pred_dim)
+        x_label_ranges, y_label_ranges = self.get_range(n, label_dim)
+
+        img_pred = self.fill_img(img_pred, n, x_pred_ranges, y_pred_ranges)
+        img_label = self.fill_img(img_label, n, x_label_ranges, y_label_ranges)
+
+        iou = torch.tensor(0)
+        for idx in range(n):
+            iou = iou + torch.sum(img_pred[idx] & img_label[idx], dtype=torch.float)/torch.sum(img_pred[idx] | img_label[idx], dtype=torch.float)
+        iou = iou/torch.tensor(n)
         # import ipdb
         # ipdb.set_trace()
-        mse = torch.mean(torch.sum((x - y)**2, axis=1))
+        mse = torch.mean(torch.sum((pred - label)**2, axis=1)) + (1 - iou)
         return mse
 
+    def get_range(self, n, params):
+        x_low = torch.max(torch.cat(((params[:, 1] - params[:, 2]).reshape(-1, 1), torch.zeros([n, 1], dtype=torch.double)), dim=1), axis=1).values
+        x_up = torch.min(torch.cat(((params[:, 1] + params[:, 2]).reshape(-1, 1), torch.ones([n, 1], dtype=torch.double)*torch.tensor(self.w)), dim=1), axis=1).values
+        y_low = torch.max(torch.cat(((params[:, 0] - params[:, 2]).reshape(-1, 1), torch.zeros([n, 1], dtype=torch.double)), dim=1), axis=1).values
+        y_up = torch.min(torch.cat(((params[:, 0] + params[:, 2]).reshape(-1, 1), torch.ones([n, 1], dtype=torch.double)*torch.tensor(self.h)), dim=1), axis=1).values
+
+        return torch.tensor(torch.cat((x_low.reshape(-1, 1), x_up.reshape(-1, 1)), dim=1), dtype=torch.long), torch.tensor(torch.cat((y_low.reshape(-1, 1), y_up.reshape(-1, 1)), dim=1), dtype=torch.long)
+
+    @staticmethod
+    def fill_img(img, n, x_ranges, y_ranges):
+        # import ipdb
+        # ipdb.set_trace()
+        for idx in range(n):
+            img[idx, y_ranges[idx, 0]:y_ranges[idx, 1], x_ranges[idx, 0]:x_ranges[idx, 1]] = 1
+        return img
 
 def generate_training_data(n: int, train_perc: float=0.8) -> Tuple[np.ndarray, np.ndarray, float, float]:
     np.random.seed(0)
@@ -53,13 +91,13 @@ def generate_training_data(n: int, train_perc: float=0.8) -> Tuple[np.ndarray, n
 
 
 # Generate data
-train_data, val_data, mn, std = generate_training_data(n=10)
+train_data, val_data, mn, std = generate_training_data(n=1000)
 data_train_loader = DataLoader(train_data, batch_size=256, shuffle=True, num_workers=8)
-data_test_loader = DataLoader(val_data, batch_size=1024, num_workers=8)
+data_test_loader = DataLoader(val_data, batch_size=1284, shuffle=True, num_workers=8)
 
 net = Net().float()
 viz = visdom.Visdom()
-criterion = DIOULOSS()# nn.MSELoss()
+criterion = DIOULOSS(mn=mn, std=std, w=200, h=200)# nn.MSELoss()
 optimizer =optim.Adadelta(net.parameters())
 
 cur_batch_win = None
@@ -72,11 +110,11 @@ cur_batch_win_opts = {
 }
 
 
-def train(epoch):
+def train(epoch: int):
     global cur_batch_win
     net.train()
     loss_list, batch_list, idx = [], [], 0
-    f = open("logging.txt", "a+")
+    f = open("train_logs.txt", "a+")
     for i, (labels, images) in enumerate(data_train_loader):
         optimizer.zero_grad()
         # import ipdb
@@ -120,19 +158,20 @@ def test():
         # total_correct += pred.eq(labels.view_as(pred)).sum()
     avg_loss /= len(val_data)
     print('Test Avg. Loss: %f' % (avg_loss.detach().cpu().item()))
+    return avg_loss
 
 
 def train_and_test(epoch):
+    f = open("test_logs.txt", "a+")
     train(epoch)
-    test()
+    avg_loss = test()
+    f.write(f"{epoch}, {avg_loss} \n")
 
 
 def main():
-    if os.path.exists("logging.txt"):
-        os.remove("logging.txt")
-        f = open("logging.txt", "w+")
-        f.close()
-    for e in range(1, 1000):
+    create_log_files("train_logs.txt", 'epoch, batch, loss\n')
+    create_log_files("test_logs.txt", 'epoch, batch, avg_loss\n')
+    for e in range(1, 10000):
         train_and_test(e)
 
 
