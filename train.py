@@ -53,7 +53,7 @@ class DIOULOSS(nn.Module):
         # import ipdb
         # ipdb.set_trace()
         mse = torch.mean(torch.sum((pred - label)**2, axis=1)) + (1 - iou)
-        return mse
+        return mse, iou
 
     def get_range(self, n, params):
         x_low = torch.max(torch.cat(((params[:, 1] - params[:, 2]).reshape(-1, 1), torch.zeros([n, 1], dtype=torch.double)), dim=1), axis=1).values
@@ -103,7 +103,7 @@ def generate_training_data(n: int, train_perc: float=0.8) -> Tuple[np.ndarray, n
 
 
 # Generate data
-train_data, val_data, mn, std = generate_training_data(n=1000)
+train_data, val_data, mn, std = generate_training_data(n=500)
 data_train_loader = DataLoader(train_data, batch_size=256, shuffle=True, num_workers=8)
 data_test_loader = DataLoader(val_data, batch_size=1284, shuffle=True, num_workers=8)
 
@@ -134,7 +134,7 @@ def train(epoch: int):
         labels = torch.stack(labels).T.float()
         output = net(images.float())
 
-        loss = criterion(output, labels)
+        loss, iou = criterion(output, labels)
 
         loss_list.append(loss.detach().cpu().item())
         batch_list.append(i + 1)
@@ -143,8 +143,13 @@ def train(epoch: int):
             print('Train - Epoch %d, Batch: %d, Loss: %f' % (epoch, i, loss.detach().cpu().item()))
             # print('Prediction: {pred} Label: {lab}'.format(pred=output[0:5], lab=labels[0:5]))
         if epoch % 100 == 0 and i == 0:
-            torch.save(net.state_dict(), f"checkpoints/model{epoch}")
-            f.write(f"{epoch}, {i}, {loss.detach().cpu().item()} \n")
+            torch.save(
+                {'state_dict': net.state_dict(),
+                 'optimizer': optimizer.state_dict(),
+                 'epoch': epoch + 1,
+                 },
+                f"checkpoints/model{epoch}")
+            f.write(f"{epoch}, {i}, {loss.detach().cpu().item()}, {iou} \n")
 
         # Update Visualization
         if viz.check_connection():
@@ -159,29 +164,31 @@ def train(epoch: int):
 
 def test():
     net.eval()
-    avg_loss = 0.0
+    avg_loss, avg_iou = 0.0, 0.0
     for i, (labels, images) in enumerate(data_test_loader):
         labels = torch.stack(labels).T.float()
         output = net(images.float())
-        avg_loss += criterion(output, labels)
-        pred = output.detach()
+        loss, iou = criterion(output, labels)
+        avg_loss += loss
+        avg_iou += iou
         # print('Prediction: {pred} Label: {lab}'.format(pred=pred[0:10], lab=labels[0:10]))
         # total_correct += pred.eq(labels.view_as(pred)).sum()
-    avg_loss /= len(val_data)
+    avg_loss /= (i+1)
+    avg_iou /= (i+1)
     # print('Test Avg. Loss: %f' % (avg_loss.detach().cpu().item()))
-    return avg_loss
+    return avg_loss, avg_iou
 
 
 def train_and_test(epoch):
     f = open("test_logs.txt", "a+")
     train(epoch)
-    avg_loss = test()
-    f.write(f"{epoch}, {avg_loss} \n")
+    avg_loss, avg_iou = test()
+    f.write(f"{epoch}, {avg_loss} , {avg_iou}\n")
 
 
 def main():
-    create_log_files("train_logs.txt", 'epoch, batch, loss\n')
-    create_log_files("test_logs.txt", 'epoch, batch, avg_loss\n')
+    create_log_files("train_logs.txt", 'epoch, batch, loss, iou\n')
+    create_log_files("test_logs.txt", 'epoch, avg_loss, avg_iou\n')
     for e in range(1, 3000):
         train_and_test(e)
 
