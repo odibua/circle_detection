@@ -21,24 +21,35 @@ class DIOULOSS(nn.Module):
         super(DIOULOSS, self).__init__()
         self.mn, self.std = mn, std
         self.w, self.h = w, h
-
+        self.img_label = None
+        self.img_pred = None
     def forward(self, pred, label):
         n = pred.size()[0]
-        img_pred = torch.zeros([n, self.w, self.h], dtype=torch.int32)
-        img_label = torch.zeros([n, self.w, self.h], dtype=torch.int32)
+        # import ipdb
+        # ipdb.set_trace()
+        if self.img_label == None:
+            self.x_pred, self.y_pred = torch.zeros([n, self.w], dtype=torch.int32), torch.zeros([n, self.h], dtype=torch.int32)
+            self.x_label, self.y_label = torch.zeros([n, self.w], dtype=torch.int32), torch.zeros([n, self.w], dtype=torch.int32)
+        else:
+            self.x_pred, self.y_pred = self.x_pred*torch.tensor(0), self.y_pred*torch.tensor(0)
+            self.x_label, self.y_label = self.x_label*torch.tensor(0), self.y_label*torch.tensor(0)
 
         pred_dim = pred*torch.tensor(self.std) + torch.tensor(mn)
         label_dim = label*torch.tensor(self.std) + torch.tensor(mn)
         x_pred_ranges, y_pred_ranges = self.get_range(n, pred_dim)
         x_label_ranges, y_label_ranges = self.get_range(n, label_dim)
 
-        img_pred = self.fill_img(img_pred, n, x_pred_ranges, y_pred_ranges)
-        img_label = self.fill_img(img_label, n, x_label_ranges, y_label_ranges)
+        # self.img_pred = self.fill_img(self.img_pred, n, x_pred_ranges, y_pred_ranges)
+        # self.img_label = self.fill_img(self.img_label, n, x_label_ranges, y_label_ranges)
 
         iou = torch.tensor(0)
         for idx in range(n):
-            iou = iou + torch.sum(img_pred[idx] & img_label[idx], dtype=torch.float)/torch.sum(img_pred[idx] | img_label[idx], dtype=torch.float)
+            self.x_pred[idx, x_pred_ranges[idx][0]:x_pred_ranges[idx][1]], self.x_label[idx, x_label_ranges[idx][0]:x_label_ranges[idx][1]] = 1, 1
+            self.y_pred[idx, y_pred_ranges[idx][0]:y_pred_ranges[idx][1]], self.y_label[idx, y_label_ranges[idx][0]:y_label_ranges[idx][1]] = 1, 1
+            iou = iou + torch.sum(self.x_pred & self.x_label, dtype=torch.float) * torch.sum(self.y_pred & self.y_label, dtype=torch.float)\
+                  / (torch.sum(self.x_pred | self.x_label, dtype=torch.float) * torch.sum(self.y_pred | self.y_label, dtype=torch.float))
         iou = iou/torch.tensor(n)
+        # print(f"IOU {iou}")
         # import ipdb
         # ipdb.set_trace()
         mse = torch.mean(torch.sum((pred - label)**2, axis=1)) + (1 - iou)
@@ -59,6 +70,7 @@ class DIOULOSS(nn.Module):
         for idx in range(n):
             img[idx, y_ranges[idx, 0]:y_ranges[idx, 1], x_ranges[idx, 0]:x_ranges[idx, 1]] = 1
         return img
+
 
 def generate_training_data(n: int, train_perc: float=0.8) -> Tuple[np.ndarray, np.ndarray, float, float]:
     np.random.seed(0)
@@ -129,8 +141,8 @@ def train(epoch: int):
 
         if i % 10 == 0:
             print('Train - Epoch %d, Batch: %d, Loss: %f' % (epoch, i, loss.detach().cpu().item()))
-            print('Prediction: {pred} Label: {lab}'.format(pred=output[0:5], lab=labels[0:5]))
-        if epoch % 50 == 0 and i == 0:
+            # print('Prediction: {pred} Label: {lab}'.format(pred=output[0:5], lab=labels[0:5]))
+        if epoch % 100 == 0 and i == 0:
             torch.save(net.state_dict(), f"checkpoints/model{epoch}")
             f.write(f"{epoch}, {i}, {loss.detach().cpu().item()} \n")
 
@@ -147,17 +159,16 @@ def train(epoch: int):
 
 def test():
     net.eval()
-    total_correct = 0
     avg_loss = 0.0
     for i, (labels, images) in enumerate(data_test_loader):
         labels = torch.stack(labels).T.float()
         output = net(images.float())
         avg_loss += criterion(output, labels)
         pred = output.detach()
-        print('Prediction: {pred} Label: {lab}'.format(pred=pred[0:10], lab=labels[0:10]))
+        # print('Prediction: {pred} Label: {lab}'.format(pred=pred[0:10], lab=labels[0:10]))
         # total_correct += pred.eq(labels.view_as(pred)).sum()
     avg_loss /= len(val_data)
-    print('Test Avg. Loss: %f' % (avg_loss.detach().cpu().item()))
+    # print('Test Avg. Loss: %f' % (avg_loss.detach().cpu().item()))
     return avg_loss
 
 
@@ -171,7 +182,7 @@ def train_and_test(epoch):
 def main():
     create_log_files("train_logs.txt", 'epoch, batch, loss\n')
     create_log_files("test_logs.txt", 'epoch, batch, avg_loss\n')
-    for e in range(1, 10000):
+    for e in range(1, 3000):
         train_and_test(e)
 
 
