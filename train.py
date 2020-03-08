@@ -61,7 +61,7 @@ class DIOULOSS(nn.Module):
 def train(epoch: int, model: nn.Module, criterion: nn.Module, optimizer: torch.optim, dataloader: torch.utils.data, mn: np.ndarray, std: np.ndarray):
     model.train()
     loss_list, batch_list, idx = [], [], 0
-    f = open("train_logs.txt", "a+")
+    f = open("checkpoints/train_logs.txt", "a+")
     for i, (labels, images) in enumerate(dataloader):
         optimizer.zero_grad()
         # import ipdb
@@ -77,19 +77,19 @@ def train(epoch: int, model: nn.Module, criterion: nn.Module, optimizer: torch.o
         if i % 10 == 0:
             print('Train - Epoch %d, Batch: %d, Loss: %f IOU %f' % (epoch, i, loss.detach().cpu().item(), iou.detach().cpu().item()))
             print('Prediction: {pred} Label: {lab}'.format(pred=output[0:2], lab=labels[0:2]))
-        if epoch % 5 == 0 and i == 0:
-            torch.save(
-                {'state_dict': model.state_dict(),
-                 'optimizer': optimizer.state_dict(),
-                 'epoch': epoch + 1,
-                 'std': std,
-                 'mn': mn,
-                 },
-                f"checkpoints/model_epoch_{epoch}_batch_{i}")
-            f.write(f"{epoch}, {i}, {loss.detach().cpu().item()}, {iou} \n")
 
         loss.backward()
         optimizer.step()
+    if epoch % 5 == 0:
+        torch.save(
+            {'state_dict': model.state_dict(),
+             'optimizer': optimizer.state_dict(),
+             'epoch': epoch + 1,
+             'std': std,
+             'mn': mn,
+             },
+            f"checkpoints/model_epoch_{epoch}_batch_{i}")
+        f.write(f"{epoch}, {i}, {loss.detach().cpu().item()}, {iou} \n")
 
 
 def test(model: nn.Module, criterion: nn.Module, dataloader: torch.utils.data):
@@ -120,7 +120,7 @@ def train_and_test(epoch: int, model: nn.Module, criterion: nn.Module, optimizer
 
 
 def main():
-    load_checkpoint = True
+    load_checkpoint = False
     # utils.create_log_files("train_logs.txt", 'epoch, batch, loss, iou\n')
     # utils.create_log_files("test_logs.txt", 'epoch, avg_loss, avg_iou\n')
 
@@ -131,16 +131,19 @@ def main():
     epoch_start, mn, std = None, None, None
     if load_checkpoint:
         # Load checkpoint, epoch, model, optimizer and relevant params
-        checkpoint = torch.load('checkpoints_n_20000/model_epoch_60_batch_0')
+        checkpoint = torch.load('checkpoints/model_epoch_100_batch_0')
         mn, std = checkpoint['mn'], checkpoint['std']
         model.load_state_dict(checkpoint['state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer'])
-        epoch_start = checkpoint['epoch']
+        # optimizer.weight_decay = 1e-6
+        epoch_start = checkpoint['epoch'] + 1
         # Generate data
         train_data, val_data, mn, std = utils.generate_training_data(n=20000, mn=mn, std=std)
     else:
         # Generate data
-        train_data, val_data, mn, std = utils.generate_training_data(n=20)
+        import ipdb
+        ipdb.set_trace()
+        train_data, val_data, mn, std = utils.generate_training_data(n=10000)
 
     data_train_loader = DataLoader(train_data, batch_size=256, shuffle=True, num_workers=0)
     data_test_loader = DataLoader(val_data, batch_size=1284, shuffle=True, num_workers=0)

@@ -33,7 +33,7 @@ def noisy_circle(size, radius, noise):
 def find_circle(img):
     # import ipdb
     # ipdb.set_trace()
-    checkpoint = torch.load('checkpoints/model_epoch_75_batch_0')
+    checkpoint = torch.load('checkpoints/model_epoch_715_batch_35')
     mn, std = checkpoint['mn'], checkpoint['std']
     net = Net()
     net.eval()
