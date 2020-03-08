@@ -3,15 +3,22 @@ import numpy as np
 import os
 from skimage.draw import circle_perimeter_aa
 from shapely.geometry import Point, GeometryCollection
-import matplotlib.pyplot as plt
+from typing import Tuple
 
 
-def create_log_files(log_file, input):
+def create_log_files(log_file: str, input: str):
+    """
+    Create log file with input as comma separated first row
+
+    :param log_file: Path to log file
+    :param input: Comma separated first row
+    :return: None
+    """
     if os.path.exists(log_file):
         os.remove(log_file)
-        f = open(log_file, "w+")
-        f.write(input)
-        f.close()
+    f = open(log_file, "w+")
+    f.write(input)
+    f.close()
 
 
 def draw_circle(img, row, col, rad):
@@ -39,11 +46,6 @@ def noisy_circle(size, radius, noise):
     return (row, col, rad), img
 
 
-def find_circle(img):
-    # Fill in this function
-    return 100, 100, 30
-
-
 def iou(params0, params1):
     row0, col0, rad0 = params0
     row1, col1, rad1 = params1
@@ -57,19 +59,57 @@ def iou(params0, params1):
     )
 
 
-def giou(params0: np.ndarray, params1: np.ndarray):
-    row0, col0, rad0 = params0
-    row1, col1, rad1 = params1
+def normalize_gaussian(x: np.ndarray, mn: np.ndarray, std: np.ndarray):
+    """
+    Normalize input based on mean and standard deviation
 
-    shape0 = Point(row0, col0).buffer(rad0)
-    shape1 = Point(row1, col1).buffer(rad1)
-    collection = GeometryCollection([shape0, shape1]).convex_hull
-
-    return (
-            1.0 - (iou(params0, params1) - collection.convex_hull.difference(shape0.union(shape1)).area /
-            collection.convex_hull.area)
-    )
-
-
-def normalize(x: np.ndarray, mn: float, std: float):
+    :param x: Input parameter
+    :param mn: Mean used for normalization
+    :param std: Standard deviation used for normalization
+    :return: Normalized input
+    """
     return (x-mn)/std
+
+
+def normalize_min_max(x: np.ndarray, max: np.ndarray, min: np.ndarray):
+    """
+    Normalize input based on minimum and maximum value
+
+    :param x: Input to be normalized
+    :param max: Maximum value used for normalization
+    :param min: Minimum value used for normalizaton
+    :return: Normalized input
+    """
+    return 2*x/(max-min)-1
+
+
+def generate_training_data(n: int, train_perc: float=0.9, mn: np.ndarray = None, std: np.ndarray = None) -> Tuple[np.ndarray, np.ndarray, float, float]:
+    np.random.seed(0)
+    def _list_of_tuples(list1, list2):
+        return list(map(lambda x, y: (x, y), list1, list2))
+    params_list = []
+    image_list = []
+    for i in range(n):
+        params, img = noisy_circle(200, 50, 2)
+        params_list.append(params)
+        image_list.append(np.expand_dims(img, axis=0))
+
+    # Split data to train and val
+    train_params_list, val_params_list = np.array(params_list[0:int(n * train_perc)]), np.array(params_list[int(n * train_perc):])
+    train_image_list, val_image_list = np.array(image_list[0:int(n * train_perc)]), np.array(image_list[int(n * train_perc):])
+
+    # Normalize output to make optimization simpler
+    if not isinstance(mn, np.ndarray):
+        mn, std = np.mean(train_params_list, axis=0), np.std(train_params_list, axis=0)
+    train_params_list = normalize_gaussian(train_params_list, mn, std)
+    val_params_list = normalize_gaussian(val_params_list, mn, std)
+
+    # Output train and test data
+    train_params_list = list(map(tuple, train_params_list))
+    val_params_list  = list(map(tuple, val_params_list))
+    train_data = _list_of_tuples(train_params_list, train_image_list)
+    val_data = _list_of_tuples(val_params_list, val_image_list)
+
+    return train_data, val_data, mn, std
+
+
