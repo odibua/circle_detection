@@ -2,7 +2,8 @@ import ipdb
 import numpy as np
 import os
 from skimage.draw import circle_perimeter_aa
-from shapely.geometry import Point, GeometryCollection
+from shapely.geometry import Point
+import torch
 from typing import Tuple
 
 
@@ -30,6 +31,13 @@ def draw_circle(img, row, col, rad):
             (cc < img.shape[1])
     )
     img[rr[valid], cc[valid]] = val[valid]
+
+
+def find_circle(model, img, mn, std):
+    img = np.expand_dims(img, axis=0)
+    detected = model(torch.tensor(img).float())
+    detected = np.array(detected[0].detach().cpu())*std + mn
+    return detected
 
 
 def noisy_circle(size, radius, noise):
@@ -84,7 +92,6 @@ def normalize_min_max(x: np.ndarray, max: np.ndarray, min: np.ndarray):
 
 
 def generate_training_data(n: int, train_perc: float=0.9, mn: np.ndarray = None, std: np.ndarray = None) -> Tuple[np.ndarray, np.ndarray, float, float]:
-    np.random.seed(0)
     def _list_of_tuples(list1, list2):
         return list(map(lambda x, y: (x, y), list1, list2))
     params_list = []
