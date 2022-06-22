@@ -6,7 +6,7 @@ Shapely == 1.6.4.post2
 matplotlib == 2.2.2
 
 
-numpy == 1.14.3
+numpy == 1.22.0
 
 # main.roche.py: 3
 scikit_image == 0.13.1
